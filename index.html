@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f172a">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Translator">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Voice Translator</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --muted:#94a3b8; --fg:#f1f5f9; --accent:#38bdf8; --rec:#ef4444; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width:560px; margin:0 auto; min-height:100%; display:flex; flex-direction:column;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); gap:14px; }
+  h1 { font-size:1.15rem; margin:4px 0 0; font-weight:600; }
+  .row { display:flex; gap:10px; align-items:end; }
+  .field { flex:1; display:flex; flex-direction:column; gap:4px; }
+  label { font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+  select { width:100%; padding:12px; border-radius:12px; border:1px solid #334155; background:var(--card);
+    color:var(--fg); font-size:1rem; }
+  .card { background:var(--card); border-radius:16px; padding:14px 16px; min-height:110px; flex:1; }
+  .card .tag { font-size:.72rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em;
+    display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+  .card .txt { font-size:1.15rem; line-height:1.45; white-space:pre-wrap; word-break:break-word; }
+  .card.out .txt { font-size:1.35rem; color:var(--accent); }
+  .placeholder { color:#64748b; }
+  button.icon { background:none; border:1px solid #334155; color:var(--fg); border-radius:10px; padding:4px 10px; font-size:.85rem; }
+  button.icon:disabled { opacity:.4; }
+  #mic { align-self:center; width:96px; height:96px; border-radius:50%; border:none; background:var(--accent);
+    color:#0f172a; font-size:2.2rem; box-shadow:0 0 0 0 rgba(56,189,248,.5); transition: transform .1s; }
+  #mic:active { transform:scale(.96); }
+  #mic.rec { background:var(--rec); color:#fff; animation:pulse 1.2s infinite; }
+  #mic:disabled { background:#334155; color:#64748b; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)} 100%{box-shadow:0 0 0 26px rgba(239,68,68,0)} }
+  #status { text-align:center; font-size:.85rem; color:var(--muted); min-height:1.2em; }
+  progress { width:100%; height:6px; }
+  #install { display:none; }
+  .hint { font-size:.75rem; color:#64748b; text-align:center; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🌐 Voice Translator</h1>
+
+  <div class="row">
+    <div class="field">
+      <label for="src">Spoken language</label>
+      <select id="src"><option value="auto">Auto-detect</option></select>
+    </div>
+    <div class="field">
+      <label for="dst">Translate to</label>
+      <select id="dst"></select>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="tag"><span>Heard <span id="detected"></span></span></div>
+    <div class="txt placeholder" id="heard">Tap the mic and speak…</div>
+  </div>
+
+  <div class="card out">
+    <div class="tag"><span>Translation</span>
+      <span><button class="icon" id="speak" disabled>🔊</button> <button class="icon" id="copy" disabled>Copy</button></span>
+    </div>
+    <div class="txt placeholder" id="result">…</div>
+  </div>
+
+  <div id="status">Starting…</div>
+  <button id="mic" disabled aria-label="Record">🎤</button>
+  <div class="hint">Tap to start, tap again to stop. Audio is sent to your server for transcription.</div>
+  <button class="icon" id="install">Install app</button>
+</main>
+
+<script type="module">
+// [code, display name, speech-synthesis locale]
+const LANGS = [
+  ["en","English","en-US"], ["ar","Arabic","ar-SA"], ["es","Spanish","es-ES"],
+  ["fr","French","fr-FR"], ["de","German","de-DE"], ["it","Italian","it-IT"],
+  ["pt","Portuguese","pt-PT"], ["ru","Russian","ru-RU"], ["tr","Turkish","tr-TR"],
+  ["zh","Chinese","zh-CN"], ["ja","Japanese","ja-JP"], ["ko","Korean","ko-KR"],
+  ["hi","Hindi","hi-IN"], ["ur","Urdu","ur-PK"], ["fa","Persian","fa-IR"],
+  ["nl","Dutch","nl-NL"], ["pl","Polish","pl-PL"], ["uk","Ukrainian","uk-UA"],
+  ["id","Indonesian","id-ID"], ["vi","Vietnamese","vi-VN"], ["th","Thai","th-TH"],
+  ["sv","Swedish","sv-SE"], ["el","Greek","el-GR"], ["he","Hebrew","he-IL"],
+  ["bn","Bengali","bn-BD"], ["sw","Swahili","sw-KE"],
+];
+const byCode = Object.fromEntries(LANGS.map(l => [l[0], l]));
+
+const $ = id => document.getElementById(id);
+const src = $("src"), dst = $("dst"), mic = $("mic"), statusEl = $("status");
+for (const [c, n] of LANGS) { src.add(new Option(n, c)); dst.add(new Option(n, c)); }
+dst.value = localStorage.getItem("dst") || "en";
+src.value = localStorage.getItem("src") || "auto";
+src.onchange = () => localStorage.setItem("src", src.value);
+dst.onchange = () => localStorage.setItem("dst", dst.value);
+const setStatus = t => statusEl.textContent = t;
+
+// ---------- Optional access code ----------
+let token = localStorage.getItem("token") || "";
+try {
+  const cfg = await (await fetch("/api/config")).json();
+  if (cfg.needsToken && !token) { token = prompt("Access code:") || ""; localStorage.setItem("token", token); }
+} catch {}
+mic.disabled = false; setStatus("Ready");
+
+// ---------- Recording ----------
+let recorder, chunks = [], stream, recording = false;
+
+async function startRec() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+  } catch { setStatus("Microphone permission denied."); return; }
+  chunks = [];
+  recorder = new MediaRecorder(stream);
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = onStopped;
+  recorder.start();
+  recording = true;
+  mic.classList.add("rec"); mic.textContent = "⏹";
+  setStatus("Listening…");
+}
+function stopRec() {
+  recording = false;
+  recorder.stop();
+  stream.getTracks().forEach(t => t.stop());
+  mic.classList.remove("rec"); mic.textContent = "🎤";
+}
+mic.onclick = () => recording ? stopRec() : startRec();
+
+// ---------- Send to server ----------
+async function onStopped() {
+  mic.disabled = true;
+  try {
+    const blob = new Blob(chunks, { type: recorder.mimeType || "audio/webm" });
+    if (blob.size < 1000) { setStatus("Too short. Try again."); return; }
+    setStatus("Listening and translating…");
+    const q = new URLSearchParams({ to: byCode[dst.value][1] });
+    if (src.value !== "auto") q.set("from", src.value);
+    const r = await fetch("/api/translate?" + q, {
+      method: "POST",
+      headers: { "content-type": blob.type, "x-app-token": token },
+      body: blob,
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) { localStorage.removeItem("token"); token = ""; setStatus("Wrong access code. Reload to re-enter."); return; }
+    if (!r.ok) throw new Error(j.error || ("HTTP " + r.status));
+    if (!j.text) { setStatus("Didn't catch anything. Try again."); return; }
+
+    $("heard").textContent = j.text; $("heard").classList.remove("placeholder");
+    const name = byCode[j.language]?.[1] || (j.language ? j.language[0].toUpperCase() + j.language.slice(1) : "");
+    $("detected").textContent = name ? "· " + name : "";
+    $("result").textContent = j.translation; $("result").classList.remove("placeholder");
+    $("speak").disabled = $("copy").disabled = false;
+    setStatus("Done");
+  } catch (e) {
+    console.error(e);
+    setStatus("Error: " + (e.message || e));
+  } finally { mic.disabled = false; }
+}
+
+$("speak").onclick = () => {
+  const u = new SpeechSynthesisUtterance($("result").textContent);
+  u.lang = byCode[dst.value][2];
+  speechSynthesis.cancel(); speechSynthesis.speak(u);
+};
+$("copy").onclick = async () => {
+  await navigator.clipboard.writeText($("result").textContent);
+  setStatus("Copied");
+};
+
+// ---------- PWA ----------
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");
+let deferred;
+addEventListener("beforeinstallprompt", e => { e.preventDefault(); deferred = e; $("install").style.display = "block"; });
+$("install").onclick = async () => { deferred.prompt(); await deferred.userChoice; $("install").style.display = "none"; };
+</script>
+</body>
+</html>
